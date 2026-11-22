@@ -35,12 +35,7 @@ typedef struct _VideoInfo {
 } VideoInfo;
 
 // ===== KHAI BÁO VIDEOS =====
-#include "video15.h"
-#include "video16.h"
-#include "video17.h"
-#include "video18.h"
-#include "chongmat1.h"
-#include "xoadau1.h"
+#include "full1.h"
 
 // ===== BUTTON STATE MACHINE =====
 enum class ButtonState {
@@ -174,14 +169,9 @@ private:
   
 public:
   VideoPlayer() {
-    // Danh sách video idle, phát lần lượt và lặp lại
+    // Video idle tunggal (full1.h), diputar berulang
     _videos = {
-      &video15,
-      &video16,
-      &video17,
-      &video18,
-      &chongmat1,
-      &xoadau1
+      &full1
     };
     
     // Bắt đầu với video đầu tiên
