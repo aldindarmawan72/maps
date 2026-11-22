@@ -9,7 +9,6 @@
 #include "ChronosTypes.h"
 #include "ChronosManager.h"
 #include "ESP32Time.h"
-#include "bg.h"
 
 // ICON_DATA_SIZE berasal dari ChronosESP32Patched.h (48x48 pixels, 1 bit per
 // pixel = 288 bytes) dan sudah tersedia lewat include ChronosManager.h.
@@ -212,7 +211,7 @@ private:
         lv_obj_set_size(_headerBar, 240, 38);
         lv_obj_set_pos(_headerBar, 0, 0);
         lv_obj_set_style_bg_color(_headerBar, lv_color_hex(NavColors::BackgroundHex), LV_PART_MAIN);
-        lv_obj_set_style_bg_opa(_headerBar, 242, LV_PART_MAIN);
+        lv_obj_set_style_bg_opa(_headerBar, 255, LV_PART_MAIN);
         lv_obj_set_style_radius(_headerBar, 0, LV_PART_MAIN);
         lv_obj_set_style_border_width(_headerBar, 0, LV_PART_MAIN);
         lv_obj_set_style_pad_all(_headerBar, 0, LV_PART_MAIN);
@@ -226,7 +225,7 @@ private:
 
         _etaLabel = lv_label_create(_headerBar);
         lv_obj_set_style_text_font(_etaLabel, VietnameseFonts::getNormalFont(), LV_PART_MAIN);
-        lv_obj_set_style_text_color(_etaLabel, lv_color_hex(NavColors::TextMutedHex), LV_PART_MAIN);
+        lv_obj_set_style_text_color(_etaLabel, lv_color_hex(NavColors::TextPrimaryHex), LV_PART_MAIN);
         lv_obj_set_width(_etaLabel, 150);
         lv_obj_set_style_text_align(_etaLabel, LV_TEXT_ALIGN_RIGHT, LV_PART_MAIN);
         lv_label_set_long_mode(_etaLabel, LV_LABEL_LONG_DOT);
@@ -247,12 +246,8 @@ private:
         _heroCard = lv_obj_create(_screen);
         lv_obj_set_size(_heroCard, 224, 152);
         lv_obj_set_pos(_heroCard, 8, 44);
-        makeSurface(_heroCard, NavColors::SurfaceHex, 242, 22, NavColors::BorderHex);
+        makeSurface(_heroCard, NavColors::SurfaceHex, 255, 22, NavColors::BorderHex);
         lv_obj_set_style_clip_corner(_heroCard, true, LV_PART_MAIN);
-        lv_obj_set_style_shadow_width(_heroCard, 14, LV_PART_MAIN);
-        lv_obj_set_style_shadow_opa(_heroCard, 60, LV_PART_MAIN);
-        lv_obj_set_style_shadow_color(_heroCard, lv_color_black(), LV_PART_MAIN);
-        lv_obj_set_style_shadow_ofs_y(_heroCard, 5, LV_PART_MAIN);
 
         // Tile biru untuk icon manuver
         _iconTile = lv_obj_create(_heroCard);
@@ -272,7 +267,7 @@ private:
         lv_obj_set_pos(_titleLabel, 68, 10);
         lv_obj_set_size(_titleLabel, 144, 31);
         lv_obj_set_style_text_font(_titleLabel, VietnameseFonts::getSemiboldSmallFont(), LV_PART_MAIN);
-        lv_obj_set_style_text_color(_titleLabel, lv_color_hex(NavColors::TextMutedHex), LV_PART_MAIN);
+        lv_obj_set_style_text_color(_titleLabel, lv_color_hex(NavColors::TextPrimaryHex), LV_PART_MAIN);
         lv_label_set_long_mode(_titleLabel, LV_LABEL_LONG_DOT);
         lv_label_set_text(_titleLabel, "");
 
@@ -295,7 +290,7 @@ private:
         _metricsBar = lv_obj_create(_screen);
         lv_obj_set_size(_metricsBar, 224, 36);
         lv_obj_set_pos(_metricsBar, 8, 200);
-        makeSurface(_metricsBar, NavColors::SurfaceHex, 235, 18, NavColors::BorderHex);
+        makeSurface(_metricsBar, NavColors::SurfaceHex, 255, 18, NavColors::BorderHex);
         lv_obj_set_layout(_metricsBar, LV_LAYOUT_FLEX);
         lv_obj_set_flex_flow(_metricsBar, LV_FLEX_FLOW_ROW);
         lv_obj_set_flex_align(_metricsBar, LV_FLEX_ALIGN_SPACE_EVENLY,
@@ -311,7 +306,7 @@ private:
 
         _durationLabel = lv_label_create(_metricsBar);
         lv_obj_set_style_text_font(_durationLabel, VietnameseFonts::getNormalFont(), LV_PART_MAIN);
-        lv_obj_set_style_text_color(_durationLabel, lv_color_hex(NavColors::TextMutedHex), LV_PART_MAIN);
+        lv_obj_set_style_text_color(_durationLabel, lv_color_hex(NavColors::TextPrimaryHex), LV_PART_MAIN);
         lv_label_set_text(_durationLabel, "");
 
         _speedLabel = lv_label_create(_metricsBar);
@@ -324,12 +319,8 @@ private:
         _idleCard = lv_obj_create(_screen);
         lv_obj_set_size(_idleCard, 224, 152);
         lv_obj_set_pos(_idleCard, 8, 44);
-        makeSurface(_idleCard, NavColors::SurfaceHex, 242, 22, NavColors::BorderHex);
+        makeSurface(_idleCard, NavColors::SurfaceHex, 255, 22, NavColors::BorderHex);
         lv_obj_set_style_clip_corner(_idleCard, true, LV_PART_MAIN);
-        lv_obj_set_style_shadow_width(_idleCard, 14, LV_PART_MAIN);
-        lv_obj_set_style_shadow_opa(_idleCard, 60, LV_PART_MAIN);
-        lv_obj_set_style_shadow_color(_idleCard, lv_color_black(), LV_PART_MAIN);
-        lv_obj_set_style_shadow_ofs_y(_idleCard, 5, LV_PART_MAIN);
 
         _idleDot = lv_obj_create(_idleCard);
         lv_obj_set_size(_idleDot, 10, 10);
@@ -350,7 +341,7 @@ private:
         lv_obj_set_pos(_defaultMessageLabel, 16, 76);
         lv_obj_set_size(_defaultMessageLabel, 192, 58);
         lv_obj_set_style_text_font(_defaultMessageLabel, VietnameseFonts::getNormalFont(), LV_PART_MAIN);
-        lv_obj_set_style_text_color(_defaultMessageLabel, lv_color_hex(NavColors::TextMutedHex), LV_PART_MAIN);
+        lv_obj_set_style_text_color(_defaultMessageLabel, lv_color_hex(NavColors::TextPrimaryHex), LV_PART_MAIN);
         lv_label_set_long_mode(_defaultMessageLabel, LV_LABEL_LONG_WRAP);
         lv_label_set_text(_defaultMessageLabel, "Mulai navigasi di Google Maps");
     }
@@ -397,11 +388,11 @@ public:
         lv_obj_set_style_bg_opa(_screen, 255, LV_PART_MAIN);
         lv_obj_clear_flag(_screen, LV_OBJ_FLAG_SCROLLABLE);
 
-        // Gambar background peta
-        _bgImage = lv_img_create(_screen);
-        lv_img_set_src(_bgImage, &bg_img);
-        lv_obj_align(_bgImage, LV_ALIGN_CENTER, 0, 0);
-        lv_obj_clear_flag(_bgImage, LV_OBJ_FLAG_CLICKABLE);
+        // Gambar background peta (dinonaktifkan agar latar solid)
+        // _bgImage = lv_img_create(_screen);
+        // lv_img_set_src(_bgImage, &bg_img);
+        // lv_obj_align(_bgImage, LV_ALIGN_CENTER, 0, 0);
+        // lv_obj_clear_flag(_bgImage, LV_OBJ_FLAG_CLICKABLE);
 
         createHeader();
         createHeroCard();
