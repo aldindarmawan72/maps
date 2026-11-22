@@ -12,6 +12,7 @@ namespace Config {
   // Hiển thị
   constexpr uint8_t DISPLAY_ROTATION = 0;  // Điều chỉnh rotation cho ST7789 1.3"
   constexpr uint8_t FRAME_DELAY_MS = 100;
+  constexpr unsigned long NAV_IDLE_TIMEOUT_MS = 10000;
   
   // GPIO và cảm biến
   constexpr uint8_t BUTTON_PIN = 1;
@@ -166,6 +167,8 @@ private:
   PlayerMode _currentMode = PlayerMode::STOPPED;
   unsigned long _lastFrameTime = 0;
   bool _navAlertShown = false;
+  unsigned long _navIdleStartTime = 0;
+  bool _navIdleTimerActive = false;
   
 public:
   VideoPlayer() {
@@ -317,41 +320,69 @@ private:
     }
     
     if (isConnectedToBLE) {
-      // Nếu đã kết nối BLE, luôn chuyển sang chế độ FULLSCREEN và chuyển sang chế độ NAVIGATING
-      if (_currentMode != PlayerMode::NAVIGATING) {
-        // Đảm bảo chế độ điều hướng là FULLSCREEN
+      if (isNavigationActive) {
+        _navIdleTimerActive = false;
+
+        if (_currentMode != PlayerMode::NAVIGATING) {
+          setMode(PlayerMode::NAVIGATING);
+          Serial.println("Navigation started - switching to navigation display");
+        }
+
+        navManager.setDisplaySuspended(false);
+
         if (navManager.getNavigationMode() != NavigationMode::FULLSCREEN) {
-          // Chuyển từ NAV_DISABLED -> BACKGROUND -> FULLSCREEN
           if (navManager.getNavigationMode() == NavigationMode::NAV_DISABLED) {
             navManager.toggleNavigationMode(); // NAV_DISABLED -> BACKGROUND
-            navManager.toggleNavigationMode(); // BACKGROUND -> FULLSCREEN
-          } 
-          // Chuyển từ BACKGROUND -> FULLSCREEN
-          else if (navManager.getNavigationMode() == NavigationMode::BACKGROUND) {
+          }
+          if (navManager.getNavigationMode() == NavigationMode::BACKGROUND) {
             navManager.toggleNavigationMode(); // BACKGROUND -> FULLSCREEN
           }
         }
-        setMode(PlayerMode::NAVIGATING);
-        Serial.println("Auto switch to navigation mode due to BLE connection");
+
+        navManager.drawFullscreenNavigation(chronosManager.getNavData());
+      } else {
+        if (!_navIdleTimerActive) {
+          _navIdleTimerActive = true;
+          _navIdleStartTime = currentTime;
+
+          if (_currentMode != PlayerMode::NAVIGATING) {
+            setMode(PlayerMode::NAVIGATING);
+          }
+
+          navManager.setDisplaySuspended(false);
+
+          if (navManager.getNavigationMode() != NavigationMode::FULLSCREEN) {
+            if (navManager.getNavigationMode() == NavigationMode::NAV_DISABLED) {
+              navManager.toggleNavigationMode(); // NAV_DISABLED -> BACKGROUND
+            }
+            if (navManager.getNavigationMode() == NavigationMode::BACKGROUND) {
+              navManager.toggleNavigationMode(); // BACKGROUND -> FULLSCREEN
+            }
+          }
+
+          Serial.println("BLE connected, waiting up to 10s for navigation");
+        } else if (currentTime - _navIdleStartTime >= Config::NAV_IDLE_TIMEOUT_MS) {
+          if (_currentMode != PlayerMode::PLAYING) {
+            setMode(PlayerMode::PLAYING);
+            Serial.println("No navigation within 10s - showing idle animation (BLE stays connected)");
+          }
+
+          navManager.setDisplaySuspended(true);
+        }
       }
     } else {
-      // Nếu không có kết nối BLE, luôn chuyển về chế độ NAV_DISABLED và quay lại chế độ PLAYING
+      _navIdleTimerActive = false;
+
       if (_currentMode == PlayerMode::NAVIGATING) {
-        // Đảm bảo chế độ điều hướng là NAV_DISABLED
-        if (navManager.getNavigationMode() != NavigationMode::NAV_DISABLED) {
-          // Chuyển từ FULLSCREEN -> BACKGROUND -> NAV_DISABLED
-          if (navManager.getNavigationMode() == NavigationMode::FULLSCREEN) {
-            navManager.toggleNavigationMode(); // FULLSCREEN -> BACKGROUND
-            navManager.toggleNavigationMode(); // BACKGROUND -> NAV_DISABLED
-          } 
-          // Chuyển từ BACKGROUND -> NAV_DISABLED
-          else if (navManager.getNavigationMode() == NavigationMode::BACKGROUND) {
-            navManager.toggleNavigationMode(); // BACKGROUND -> NAV_DISABLED
-          }
-        }
         setMode(PlayerMode::PLAYING);
         Serial.println("Auto switch to video mode due to BLE disconnection");
       }
+
+      if (navManager.getNavigationMode() != NavigationMode::NAV_DISABLED) {
+        navManager.toggleNavigationMode();
+      }
+
+      navManager.setDisplaySuspended(true);
     }
   }
   

@@ -372,7 +372,7 @@ public:
 	void setHealthRequestCallback(void (*callback)(HealthRequest, bool));
 
 private:
-    String _watchName = "MrVocSi";
+    String _watchName = "arviwatch";
     String _address;
     bool _inited;
     bool _subscribed;

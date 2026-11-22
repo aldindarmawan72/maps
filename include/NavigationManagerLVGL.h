@@ -28,6 +28,8 @@ private:
   static constexpr unsigned long ALERT_DURATION = 3000; // 3 giây
   LVGL_Display* _display = nullptr;
   ESP32Time* _time = nullptr;
+  lv_obj_t* _blankScreen = nullptr;
+  bool _displaySuspended = false;
   
   // Dữ liệu chỉ đường đã lưu để so sánh thay đổi
   AppNavigation _navData;
@@ -67,6 +69,11 @@ public:
       delete _time;
       _time = nullptr;
     }
+
+    if (_blankScreen != nullptr) {
+      lv_obj_del(_blankScreen);
+      _blankScreen = nullptr;
+    }
   }
   
   void init(LVGL_Display* display) {
@@ -95,6 +102,10 @@ public:
     
     // Cập nhật Chronos Manager
     ChronosManager::getInstance().update();
+
+    if (_displaySuspended) {
+      return;
+    }
     
     // Kiểm tra trạng thái kết nối BLE
     static bool lastConnectedState = false;
@@ -251,6 +262,42 @@ public:
   NavigationMode getNavigationMode() {
     return _navMode;
   }
+
+  void setDisplaySuspended(bool suspended) {
+    if (_displaySuspended == suspended) {
+      return;
+    }
+    _displaySuspended = suspended;
+
+    if (suspended) {
+      if (_blankScreen == nullptr) {
+        _blankScreen = lv_obj_create(NULL);
+        if (_blankScreen != nullptr) {
+          lv_obj_set_style_bg_color(_blankScreen, lv_color_black(), LV_PART_MAIN);
+          lv_obj_set_style_bg_opa(_blankScreen, 255, LV_PART_MAIN);
+          lv_obj_clear_flag(_blankScreen, LV_OBJ_FLAG_SCROLLABLE);
+        }
+      }
+      if (_blankScreen != nullptr) {
+        lv_scr_load(_blankScreen);
+      }
+      Serial.println("Navigation display suspended - idle animation active");
+    } else {
+      _needRedraw = true;
+      if (ChronosManager::getInstance().isConnected() &&
+          _navMode == NavigationMode::NAV_DISABLED) {
+        _navMode = NavigationMode::FULLSCREEN;
+      }
+      if (_navScreen != nullptr && _navScreen->isScreenReady()) {
+        _navScreen->display();
+      }
+      Serial.println("Navigation display resumed");
+    }
+  }
+
+  bool isDisplaySuspended() {
+    return _displaySuspended;
+  }
   
   // Lấy dữ liệu điều hướng hiện tại
   AppNavigation getNavData() {
@@ -284,6 +331,10 @@ public:
   
   // Hiển thị điều hướng toàn màn hình sử dụng NavigationScreenLVGL
   void drawFullscreenNavigation(const AppNavigation& navData) {
+    if (_displaySuspended) {
+      return;
+    }
+
     if (!_navScreen) {
       Serial.println("Cannot display navigation: _navScreen is null");
       return;
