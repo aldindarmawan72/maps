@@ -216,6 +216,8 @@ void ChronosESP32Patched::onDisconnect(NimBLEServer *pServer, NimBLEConnInfo &co
 	_connected = false;
 	BLEDevice::startAdvertising();
 	_touch.state = false; // release touch
+	_musicInfo = MusicInfo(); // clear stale now-playing info
+	_musicVersion++;
 
 	if (_navigation.active)
 	{
@@ -488,6 +490,73 @@ void ChronosESP32Patched::dataReceived() {
                     
                     if (configurationReceivedCallback != nullptr) {
                         configurationReceivedCallback(ConfigType::CF_TIME, 0, 0);
+                    }
+                }
+                break;
+
+            // Thông tin bài hát đang phát (music info)
+            case 0x9D:
+                if (_incomingData.data[3] == 0xFE) {
+                    switch (_incomingData.data[5]) {
+                        case 0x80: {
+                            // Trạng thái phát + tên app + package
+                            _musicInfo.state = _incomingData.data[6];
+                            _musicInfo.backgroundColor = ((uint32_t)_incomingData.data[7] << 16) |
+                                                         ((uint32_t)_incomingData.data[8] << 8) |
+                                                         (uint32_t)_incomingData.data[9];
+                            _musicInfo.textColor = ((uint32_t)_incomingData.data[10] << 16) |
+                                                   ((uint32_t)_incomingData.data[11] << 8) |
+                                                   (uint32_t)_incomingData.data[12];
+
+                            int i = 13;
+                            _musicInfo.appName = "";
+                            while (i < len && _incomingData.data[i] != 0) {
+                                _musicInfo.appName += (char)_incomingData.data[i];
+                                i++;
+                            }
+                            i++;
+                            _musicInfo.packageName = "";
+                            while (i < len && _incomingData.data[i] != 0) {
+                                _musicInfo.packageName += (char)_incomingData.data[i];
+                                i++;
+                            }
+
+                            _musicVersion++;
+                            if (configurationReceivedCallback != nullptr) {
+                                configurationReceivedCallback(ConfigType::CF_MUSIC, 0, _musicInfo.state);
+                            }
+                            break;
+                        }
+                        case 0x81: {
+                            // Tên bài hát
+                            _musicInfo.title = "";
+                            int i = 7;
+                            while (i < len && _incomingData.data[i] != 0) {
+                                _musicInfo.title += (char)_incomingData.data[i];
+                                i++;
+                            }
+                            _musicVersion++;
+                            if (configurationReceivedCallback != nullptr) {
+                                configurationReceivedCallback(ConfigType::CF_MUSIC, 1, _musicInfo.state);
+                            }
+                            break;
+                        }
+                        case 0x82: {
+                            // Tên ca sĩ
+                            _musicInfo.artist = "";
+                            int i = 7;
+                            while (i < len && _incomingData.data[i] != 0) {
+                                _musicInfo.artist += (char)_incomingData.data[i];
+                                i++;
+                            }
+                            _musicVersion++;
+                            if (configurationReceivedCallback != nullptr) {
+                                configurationReceivedCallback(ConfigType::CF_MUSIC, 2, _musicInfo.state);
+                            }
+                            break;
+                        }
+                        default:
+                            break;
                     }
                 }
                 break;
@@ -774,6 +843,10 @@ Navigation ChronosESP32Patched::getNavigation() {
     printNavigationDetails();
     
     return _navigation;
+}
+
+MusicInfo &ChronosESP32Patched::getMusicInfo() {
+    return _musicInfo;
 }
 
 bool ChronosESP32Patched::capturePhoto() {

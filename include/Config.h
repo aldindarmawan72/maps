@@ -12,6 +12,9 @@ namespace Config {
   
   // LVGL update interval
   constexpr uint16_t LVGL_UPDATE_INTERVAL = 20;  // ms
+
+  // Idle-video <-> home cycle (only while music is playing and no navigation)
+  constexpr unsigned long HOME_DISPLAY_MS = 15000; // 15 s HOME display per cycle
 }
 
 #endif // CONFIG_H

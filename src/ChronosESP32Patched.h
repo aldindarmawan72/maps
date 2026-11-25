@@ -40,7 +40,7 @@
 #include <ESP32Time.h>
 
 #define CHRONOSESP_VERSION_MAJOR 1
-#define CHRONOSESP_VERSION_MINOR 8
+#define CHRONOSESP_VERSION_MINOR 9
 #define CHRONOSESP_VERSION_PATCH 1
 
 #define CHRONOSESP_VERSION F(CHRONOSESP_VERSION_MAJOR "." CHRONOSESP_VERSION_MINOR "." CHRONOSESP_VERSION_PATCH)
@@ -161,6 +161,17 @@ struct Navigation
 	uint32_t iconCRC;			  // to identify whether the icon has changed
 };
 
+struct MusicInfo
+{
+	uint8_t state = 0; // 0 = paused, 1 = playing
+	uint32_t textColor = 0xFFFFFF;
+	uint32_t backgroundColor = 0x000000;
+	String title;
+	String artist;
+	String appName;
+	String packageName;
+};
+
 struct Contact
 {
 	String name;
@@ -203,6 +214,8 @@ enum ConfigType
 	CF_NAV_DATA, // navigation data received
 	CF_NAV_ICON, // navigation icon received
 	CF_CONTACT,	 // contacts data received
+	CF_SYNCED,	 // data sync completed
+	CF_MUSIC,	 // music info received (b = 0 paused, b = 1 playing)
 };
 
 enum HealthRequest
@@ -328,6 +341,10 @@ public:
 	Navigation getNavigation();
 	void printNavigationDetails(); // Helper to print navigation details
 
+	// music
+	MusicInfo &getMusicInfo();
+	uint32_t getMusicVersion() const { return _musicVersion; }
+
 	// contacts
 	void setContact(int index, Contact contact);
 	Contact getContact(int index);
@@ -421,6 +438,11 @@ private:
     ChronosScreen _screenConf = CS_240x240_128_CTF;
 
     Navigation _navigation;
+    MusicInfo _musicInfo;
+    // Incremented on each music packet in the BLE callback task. The main loop
+    // snapshots _musicInfo only when this changes (avoids UI reads while the
+    // NimBLE task is writing).
+    volatile uint32_t _musicVersion = 0;
     
     // Biến theo dõi trạng thái cập nhật dữ liệu điều hướng
     static bool _navigationDetailsUpdated;

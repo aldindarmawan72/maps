@@ -52,7 +52,8 @@ enum class PlayerMode {
   STOPPED,
   PLAYING,
   PAUSED,
-  NAVIGATING
+  NAVIGATING,
+  HOME          // tampilkan jam besar + kotak musik (tanpa video)
 };
 
 // ===== INPUT MANAGER =====
@@ -169,6 +170,11 @@ private:
   bool _navAlertShown = false;
   unsigned long _navIdleStartTime = 0;
   bool _navIdleTimerActive = false;
+
+  // Siklus IDLE_VIDEO (1 putaran) <-> HOME (15 detik) saat musik aktif
+  unsigned long _homeStartTime = 0;
+  bool _homeTimerActive = false;
+  bool _cycleJustCompleted = false;
   
 public:
   VideoPlayer() {
@@ -243,6 +249,13 @@ public:
           // Chuyển sang video tiếp theo, hết danh sách thì quay lại video đầu
           _currentFrame = 0;
           _currentIndex = (_currentIndex + 1) % _videos.size();
+          _cycleJustCompleted = true;
+
+          // Satu siklus penuh selesai. Bila ada musik aktif (dan tanpa
+          // navigasi), pindah ke HOME tanpa memotong video.
+          if (_currentMode == PlayerMode::PLAYING && hasActiveMusic()) {
+            enterHome("idle video cycle complete");
+          }
         }
         
         // Cập nhật nhanh input sau khi vẽ frame
@@ -259,7 +272,7 @@ public:
       
       if (mode == PlayerMode::STOPPED) {
         clearScreen(); // Xóa màn hình về màu đen
-      } else if (mode == PlayerMode::PLAYING) {
+      } else if (mode == PlayerMode::PLAYING || mode == PlayerMode::HOME) {
         LVGL_Display::getInstance().setBacklight(true);
       } else if (mode == PlayerMode::NAVIGATING) {
         // Xóa màn hình về màu đen trước khi chuyển sang màn hình navigation
@@ -281,108 +294,184 @@ public:
   }
   
 private:
-  // Kiểm tra trạng thái điều hướng
+  // Sumber status musik (sama dengan UI): judul ada & tidak pause.
+  bool hasActiveMusic() {
+    return ChronosManager::getInstance().hasActiveMusic();
+  }
+
+  // Pastikan layar navigasi dalam mode FULLSCREEN.
+  void ensureFullscreen(NavigationManagerLVGL& navManager) {
+    if (navManager.getNavigationMode() == NavigationMode::NAV_DISABLED) {
+      navManager.toggleNavigationMode(); // NAV_DISABLED -> BACKGROUND
+    }
+    if (navManager.getNavigationMode() == NavigationMode::BACKGROUND) {
+      navManager.toggleNavigationMode(); // BACKGROUND -> FULLSCREEN
+    }
+  }
+
+  // Masuk ke HOME (jam besar + kotak musik) dan tampilkan layar navigasi.
+  void enterHome(const char* reason) {
+    _homeStartTime = millis();
+    _homeTimerActive = true;
+    _cycleJustCompleted = false;
+    setMode(PlayerMode::HOME);
+
+    auto& navManager = NavigationManagerLVGL::getInstance();
+    navManager.setDisplaySuspended(false);
+    ensureFullscreen(navManager);
+    navManager.drawFullscreenNavigation(ChronosManager::getInstance().getNavData());
+
+    Serial.printf("State: -> HOME (%s), tampil %lus\n", reason,
+                  (unsigned long)(Config::HOME_DISPLAY_MS / 1000));
+  }
+
+  // Masuk mode video idle (loop 1 siklus).
+  void enterVideoLoop(const char* reason) {
+    _homeTimerActive = false;
+    _cycleJustCompleted = false;
+    if (_currentMode != PlayerMode::PLAYING) {
+      // Mulai siklus video dari awal.
+      _currentFrame = 0;
+      _currentIndex = 0;
+      _lastFrameTime = millis();
+      setMode(PlayerMode::PLAYING);
+      Serial.printf("State: -> PLAYING/IDLE_VIDEO (%s)\n", reason);
+    }
+    NavigationManagerLVGL::getInstance().setDisplaySuspended(true);
+  }
+
+  // Kiểm tra trạng thái điều hướng + musik, kelola transisi state.
   void checkNavigationMode() {
-    // Kiểm tra xem Navigation Manager đã được khởi tạo chưa
-    static bool navManagerInitialized = false;
     static unsigned long lastCheckTime = 0;
-    
+
     // Chỉ kiểm tra mỗi 500ms
     unsigned long currentTime = millis();
     if (currentTime - lastCheckTime < 500) {
       return;
     }
     lastCheckTime = currentTime;
-    
+
     // Kiểm tra một cách an toàn - sử dụng biến tĩnh từ loop()
     extern bool navigationInitialized;
     if (!navigationInitialized) {
       return; // Nếu chưa khởi tạo, không làm gì cả
     }
-    
+
     auto& navManager = NavigationManagerLVGL::getInstance();
     auto& chronosManager = ChronosManager::getInstance();
-    
-    // Kiểm tra kết nối BLE trực tiếp từ ChronosManager
+
     bool isConnectedToBLE = chronosManager.isConnected();
     bool isNavigationActive = chronosManager.isNavigating();
-    
-    // In debug mỗi 10 giây để xác nhận trạng thái kết nối
+    bool musicActive = chronosManager.hasActiveMusic();
+
+    // In debug mỗi 10 giây để xác nhận trạng thái
     static unsigned long lastDebugTime = 0;
-    currentTime = millis();
     if (currentTime - lastDebugTime > 10000) {
       lastDebugTime = currentTime;
-      Serial.printf("BLE Connection Status: %s, Navigation Active: %s, Navigation Mode: %d, Player Mode: %d\n", 
-                  isConnectedToBLE ? "Connected" : "Disconnected",
-                  isNavigationActive ? "Active" : "Inactive",
-                  (int)navManager.getNavigationMode(),
-                  (int)_currentMode);
+      Serial.printf("BLE: %s, Nav: %s, Music: %s, NavMode: %d, PlayerMode: %d\n",
+                    isConnectedToBLE ? "Connected" : "Disconnected",
+                    isNavigationActive ? "Active" : "Inactive",
+                    musicActive ? "Playing" : "None",
+                    (int)navManager.getNavigationMode(),
+                    (int)_currentMode);
     }
-    
-    if (isConnectedToBLE) {
-      if (isNavigationActive) {
-        _navIdleTimerActive = false;
 
-        if (_currentMode != PlayerMode::NAVIGATING) {
-          setMode(PlayerMode::NAVIGATING);
-          Serial.println("Navigation started - switching to navigation display");
-        }
-
-        navManager.setDisplaySuspended(false);
-
-        if (navManager.getNavigationMode() != NavigationMode::FULLSCREEN) {
-          if (navManager.getNavigationMode() == NavigationMode::NAV_DISABLED) {
-            navManager.toggleNavigationMode(); // NAV_DISABLED -> BACKGROUND
-          }
-          if (navManager.getNavigationMode() == NavigationMode::BACKGROUND) {
-            navManager.toggleNavigationMode(); // BACKGROUND -> FULLSCREEN
-          }
-        }
-
-        navManager.drawFullscreenNavigation(chronosManager.getNavData());
-      } else {
-        if (!_navIdleTimerActive) {
-          _navIdleTimerActive = true;
-          _navIdleStartTime = currentTime;
-
-          if (_currentMode != PlayerMode::NAVIGATING) {
-            setMode(PlayerMode::NAVIGATING);
-          }
-
-          navManager.setDisplaySuspended(false);
-
-          if (navManager.getNavigationMode() != NavigationMode::FULLSCREEN) {
-            if (navManager.getNavigationMode() == NavigationMode::NAV_DISABLED) {
-              navManager.toggleNavigationMode(); // NAV_DISABLED -> BACKGROUND
-            }
-            if (navManager.getNavigationMode() == NavigationMode::BACKGROUND) {
-              navManager.toggleNavigationMode(); // BACKGROUND -> FULLSCREEN
-            }
-          }
-
-          Serial.println("BLE connected, waiting up to 10s for navigation");
-        } else if (currentTime - _navIdleStartTime >= Config::NAV_IDLE_TIMEOUT_MS) {
-          if (_currentMode != PlayerMode::PLAYING) {
-            setMode(PlayerMode::PLAYING);
-            Serial.println("No navigation within 10s - showing idle animation (BLE stays connected)");
-          }
-
-          navManager.setDisplaySuspended(true);
-        }
-      }
-    } else {
+    // ---- BLE terputus: video idle loop biasa ----
+    if (!isConnectedToBLE) {
       _navIdleTimerActive = false;
+      _homeTimerActive = false;
+      _cycleJustCompleted = false;
 
-      if (_currentMode == PlayerMode::NAVIGATING) {
+      if (_currentMode != PlayerMode::PLAYING) {
         setMode(PlayerMode::PLAYING);
-        Serial.println("Auto switch to video mode due to BLE disconnection");
+        Serial.println("State: BLE terputus -> PLAYING/IDLE_VIDEO");
       }
 
       if (navManager.getNavigationMode() != NavigationMode::NAV_DISABLED) {
         navManager.toggleNavigationMode();
       }
-
       navManager.setDisplaySuspended(true);
+      return;
+    }
+
+    // ---- Navigasi aktif: prioritas tertinggi, batalkan semua timer ----
+    if (isNavigationActive) {
+      _navIdleTimerActive = false;
+      _homeTimerActive = false;
+      _cycleJustCompleted = false;
+
+      if (_currentMode != PlayerMode::NAVIGATING) {
+        setMode(PlayerMode::NAVIGATING);
+        Serial.println("State: -> NAVIGATING (navigasi aktif)");
+      }
+
+      navManager.setDisplaySuspended(false);
+      ensureFullscreen(navManager);
+      navManager.drawFullscreenNavigation(chronosManager.getNavData());
+      return;
+    }
+
+    // ---- Navigasi tidak aktif + musik aktif: siklus video <-> HOME ----
+    if (musicActive) {
+      _navIdleTimerActive = false;
+
+      if (_currentMode == PlayerMode::HOME) {
+        // Ganti lagu tidak me-reset timer; cukup refresh teks & layar.
+        navManager.setDisplaySuspended(false);
+        ensureFullscreen(navManager);
+        navManager.drawFullscreenNavigation(chronosManager.getNavData());
+
+        if (_homeTimerActive && currentTime - _homeStartTime >= Config::HOME_DISPLAY_MS) {
+          enterVideoLoop("HOME 15s selesai");
+        }
+        return;
+      }
+
+      if (_currentMode != PlayerMode::PLAYING) {
+        // Sedang di layar tunggu / state lain: mulai siklus video dari awal.
+        enterVideoLoop("musik aktif, mulai siklus video");
+      } else {
+        navManager.setDisplaySuspended(true);
+      }
+      return;
+    }
+
+    // ---- Navigasi tidak aktif + tidak ada musik: perilaku lama ----
+    _homeTimerActive = false;
+    _cycleJustCompleted = false;
+
+    if (_currentMode == PlayerMode::HOME) {
+      // Musik berhenti saat di HOME: segera kembali ke video.
+      enterVideoLoop("musik berhenti saat di HOME");
+      return;
+    }
+
+    if (!_navIdleTimerActive) {
+      _navIdleTimerActive = true;
+      _navIdleStartTime = currentTime;
+
+      if (_currentMode != PlayerMode::NAVIGATING) {
+        setMode(PlayerMode::NAVIGATING);
+      }
+
+      navManager.setDisplaySuspended(false);
+      ensureFullscreen(navManager);
+      navManager.drawFullscreenNavigation(chronosManager.getNavData());
+
+      Serial.println("State: BLE terhubung, menunggu navigasi maks 10s");
+    } else if (currentTime - _navIdleStartTime >= Config::NAV_IDLE_TIMEOUT_MS) {
+      if (_currentMode != PlayerMode::PLAYING) {
+        setMode(PlayerMode::PLAYING);
+        Serial.println("State: tidak ada navigasi dalam 10s -> PLAYING/IDLE_VIDEO");
+      }
+      navManager.setDisplaySuspended(true);
+    } else {
+      // Masih menunggu: pastikan layar tunggu tetap tampil.
+      if (_currentMode == PlayerMode::NAVIGATING) {
+        navManager.setDisplaySuspended(false);
+        ensureFullscreen(navManager);
+        navManager.drawFullscreenNavigation(chronosManager.getNavData());
+      }
     }
   }
   

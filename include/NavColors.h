@@ -47,6 +47,10 @@ namespace NavColors {
     static constexpr uint32_t DistanceTextHex  = Amber950;
     static constexpr uint32_t SuccessHex       = Green400;
 
+    // ---- BLE connection status dot ----
+    static constexpr uint32_t BleConnectedHex    = 0x00E676; // connected
+    static constexpr uint32_t BleDisconnectedHex = 0xFF3B30; // disconnected
+
     // ---- legacy aliases (used by the old LovyanGFX screen) ----
     static constexpr uint32_t ForegroundHex    = Slate100;
     static constexpr uint32_t SecondaryHex     = Blue500;

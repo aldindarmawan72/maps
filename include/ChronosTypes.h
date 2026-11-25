@@ -53,7 +53,9 @@ enum class AppConfigType {
     CF_CONTACT,
     CF_QR,
     CF_FONT,
-    CF_RST
+    CF_RST,
+    CF_SYNCED,
+    CF_MUSIC
 };
 
 #endif // CHRONOS_TYPES_H

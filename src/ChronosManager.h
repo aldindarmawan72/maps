@@ -23,6 +23,10 @@ private:
     
     // Dữ liệu điều hướng hiện tại
     AppNavigation _navData;
+
+    // Snapshot thông tin bài hát, chỉ cập nhật trong loop chính khi version đổi
+    MusicInfo _musicSnapshot;
+    uint32_t _musicVersion = 0;
     
     // Callback khi nhận được biểu tượng điều hướng
     static void iconCallbackHandler(uint8_t icon, String data) {
@@ -114,6 +118,21 @@ private:
         case ConfigType::CF_TIME:
             Serial.println("Received time sync from app");
             break;
+            
+        case ConfigType::CF_MUSIC: {
+            // a = 0 (status/app), 1 (title), 2 (artist)
+            // Called from the NimBLE task, so read the library object directly
+            // (never touch the LVGL snapshot / UI from here).
+            MusicInfo music = (instance.chronos != nullptr)
+                                  ? instance.chronos->getMusicInfo()
+                                  : MusicInfo();
+            if (value1 == 2) {
+                Serial.printf("Music: %s - %s [%s] state=%s\n",
+                              music.title.c_str(), music.artist.c_str(),
+                              music.appName.c_str(), music.state == 1 ? "playing" : "paused");
+            }
+            break;
+        }
             
         default:
             Serial.printf("Received config type: %d, values: %u, %u\n", 
@@ -209,6 +228,19 @@ public:
         // Gọi loop() của ChronosESP32 để xử lý các tác vụ nội bộ, như trong ví dụ
         if (chronos != nullptr) {
             chronos->loop();
+
+            // Chỉ sao chép dữ liệu nhạc khi callback BLE báo có bản mới.
+            // Việc đọc/ghi String diễn ra ở loop chính thay vì task NimBLE.
+            // Đọc version 2 lần để tránh chụp phải dữ liệu đang được ghi dở.
+            uint32_t versionBefore = chronos->getMusicVersion();
+            if (versionBefore != _musicVersion) {
+                MusicInfo copy = chronos->getMusicInfo();
+                uint32_t versionAfter = chronos->getMusicVersion();
+                if (versionBefore == versionAfter) {
+                    _musicVersion = versionBefore;
+                    _musicSnapshot = copy;
+                }
+            }
         }
         
         // Kiểm tra trạng thái kết nối BLE
@@ -265,6 +297,25 @@ public:
         return _navData;
     }
     
+    // Thông tin bài hát đang phát từ điện thoại (YouTube Music, Spotify, ...)
+    MusicInfo getMusicInfo() {
+        if (chronos != nullptr && chronos->isConnected()) {
+            return _musicSnapshot;
+        }
+        return MusicInfo();
+    }
+    
+    bool isMusicPlaying() {
+        return getMusicInfo().state == 1;
+    }
+
+    // Musik dianggap aktif (untuk siklus video<->HOME) hanya bila ada judul
+    // dan tidak sedang pause.
+    bool hasActiveMusic() {
+        MusicInfo music = getMusicInfo();
+        return music.state == 1 && music.title.length() > 0;
+    }
+    
     // Gửi lệnh tùy chỉnh đến thiết bị Chronos
     void sendCommand(uint8_t* command, size_t length) {
         if (chronos != nullptr) {
@@ -289,6 +340,7 @@ public:
             Serial.println("BLE disconnected from Chronos app");
             _isNavigating = false;
             _navData.active = false;
+            _musicSnapshot = MusicInfo();
         }
     }
     
@@ -333,6 +385,10 @@ public:
                 return AppConfigType::CF_FONT;
             case ConfigType::CF_RST:
                 return AppConfigType::CF_RST;
+            case ConfigType::CF_SYNCED:
+                return AppConfigType::CF_SYNCED;
+            case ConfigType::CF_MUSIC:
+                return AppConfigType::CF_MUSIC;
             default:
                 // Trường hợp mặc định, trả về CF_TIME
                 return AppConfigType::CF_TIME;
@@ -356,6 +412,9 @@ public:
                 
             case AppConfigType::CF_NAV_ICON:
                 Serial.printf("Received navigation icon: %d\n", (int)value1);
+                break;
+                
+            case AppConfigType::CF_MUSIC:
                 break;
                 
             default:
