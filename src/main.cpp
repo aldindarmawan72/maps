@@ -253,7 +253,11 @@ public:
 
           // Satu siklus penuh selesai. Bila ada musik aktif (dan tanpa
           // navigasi), pindah ke HOME tanpa memotong video.
-          if (_currentMode == PlayerMode::PLAYING && hasActiveMusic()) {
+          bool navActive = ChronosManager::getInstance().isNavigating();
+          bool musicActive = hasActiveMusic();
+          Serial.printf("[STATE] idle: hasMusic=%d navActive=%d cycleDone=%d\n",
+                        musicActive ? 1 : 0, navActive ? 1 : 0, 1);
+          if (_currentMode == PlayerMode::PLAYING && musicActive && !navActive) {
             enterHome("idle video cycle complete");
           }
         }
@@ -311,33 +315,36 @@ private:
 
   // Masuk ke HOME (jam besar + kotak musik) dan tampilkan layar navigasi.
   void enterHome(const char* reason) {
+    PlayerMode prev = _currentMode;
     _homeStartTime = millis();
     _homeTimerActive = true;
     _cycleJustCompleted = false;
-    setMode(PlayerMode::HOME);
 
     auto& navManager = NavigationManagerLVGL::getInstance();
+    navManager.setHomeMode(true);
     navManager.setDisplaySuspended(false);
     ensureFullscreen(navManager);
+    setMode(PlayerMode::HOME);
     navManager.drawFullscreenNavigation(ChronosManager::getInstance().getNavData());
 
-    Serial.printf("State: -> HOME (%s), tampil %lus\n", reason,
+    Serial.printf("[STATE] %d -> HOME (%s), tampil %lus\n", (int)prev, reason,
                   (unsigned long)(Config::HOME_DISPLAY_MS / 1000));
   }
 
   // Masuk mode video idle (loop 1 siklus).
   void enterVideoLoop(const char* reason) {
+    PlayerMode prev = _currentMode;
     _homeTimerActive = false;
     _cycleJustCompleted = false;
-    if (_currentMode != PlayerMode::PLAYING) {
-      // Mulai siklus video dari awal.
-      _currentFrame = 0;
-      _currentIndex = 0;
-      _lastFrameTime = millis();
-      setMode(PlayerMode::PLAYING);
-      Serial.printf("State: -> PLAYING/IDLE_VIDEO (%s)\n", reason);
-    }
+
+    auto& navManager = NavigationManagerLVGL::getInstance();
+    navManager.setHomeMode(false);
     NavigationManagerLVGL::getInstance().setDisplaySuspended(true);
+
+    if (_currentMode != PlayerMode::PLAYING) {
+      setMode(PlayerMode::PLAYING);
+      Serial.printf("[STATE] %d -> PLAYING/IDLE_VIDEO (%s)\n", (int)prev, reason);
+    }
   }
 
   // Kiểm tra trạng thái điều hướng + musik, kelola transisi state.
@@ -402,9 +409,10 @@ private:
 
       if (_currentMode != PlayerMode::NAVIGATING) {
         setMode(PlayerMode::NAVIGATING);
-        Serial.println("State: -> NAVIGATING (navigasi aktif)");
+        Serial.println("[STATE] -> NAVIGATING (navigasi aktif)");
       }
 
+      navManager.setHomeMode(false);
       navManager.setDisplaySuspended(false);
       ensureFullscreen(navManager);
       navManager.drawFullscreenNavigation(chronosManager.getNavData());
@@ -454,11 +462,13 @@ private:
         setMode(PlayerMode::NAVIGATING);
       }
 
+      // Layar tunggu: tampilkan HOME (jam besar) tanpa musik bila belum ada.
+      navManager.setHomeMode(true);
       navManager.setDisplaySuspended(false);
       ensureFullscreen(navManager);
       navManager.drawFullscreenNavigation(chronosManager.getNavData());
 
-      Serial.println("State: BLE terhubung, menunggu navigasi maks 10s");
+      Serial.println("State: BLE terhubung, menunggu navigasi maks 10s (HOME)");
     } else if (currentTime - _navIdleStartTime >= Config::NAV_IDLE_TIMEOUT_MS) {
       if (_currentMode != PlayerMode::PLAYING) {
         setMode(PlayerMode::PLAYING);
@@ -466,8 +476,9 @@ private:
       }
       navManager.setDisplaySuspended(true);
     } else {
-      // Masih menunggu: pastikan layar tunggu tetap tampil.
+      // Masih menunggu: pastikan layar tunggu (HOME) tetap tampil.
       if (_currentMode == PlayerMode::NAVIGATING) {
+        navManager.setHomeMode(true);
         navManager.setDisplaySuspended(false);
         ensureFullscreen(navManager);
         navManager.drawFullscreenNavigation(chronosManager.getNavData());

@@ -16,13 +16,18 @@
 // ============================================================================
 // Navigation HUD / HOME (240x240)
 // ----------------------------------------------------------------------------
-//  Header  : jam kiri (x10), dot BLE kanan (x222), divider y33
-//  Kartu   : x8  y38  w224 h146  (radius 14)
+//  NAVIGATION
+//   header : jam kecil (10,1), dot BLE (222,12), divider y33
+//   kartu  : x8 y38 w224 h146 (radius 14)
 //            icon 44x44 (12,4) + jarak (64,2)
 //            instruksi 2 baris (12,48,200x62)
-//            divider (12,112) + ETA marquee (12,114,200x29)
-//  Musik   : x8  y188 w224 h40   (radius 12)  -> terpisah dari kartu
-//  HOME    : idleCard sama area kartu + jam besar + kotak musik di bawah
+//            divider (12,112) + ETA marquee (12,114,200x26)
+//   musik  : x8 y188 w224 h40 (radius 12) - terpisah dari kartu
+//  HOME
+//   header : HANYA dot BLE (jam kecil disembunyikan)
+//   jam besar : center horizontal, y 70-119 (number_bold_48)
+//   label : "Tidak ada navigasi" satu baris (center, y 126)
+//   musik : sama seperti di atas (x8 y188)
 // ============================================================================
 
 class NavigationScreenLVGL {
@@ -48,18 +53,16 @@ private:
     lv_obj_t* _etaDivider = nullptr;
     lv_obj_t* _etaLabel = nullptr;
 
+    // ---- HOME / idle ----
+    lv_obj_t* _homeClock = nullptr;
+    lv_obj_t* _homeHint = nullptr;
+
     // ---- now playing (kotak musik terpisah di bawah kartu) ----
     lv_obj_t* _musicBox = nullptr;
     lv_obj_t* _musicIcon = nullptr;
     lv_obj_t* _musicLabel = nullptr;
     bool _showMusic = false;
     bool _lastHasMusic = false;
-
-    // ---- idle / HOME state ----
-    lv_obj_t* _idleCard = nullptr;
-    lv_obj_t* _idleTitle = nullptr;
-    lv_obj_t* _idleClock = nullptr;
-    lv_obj_t* _defaultMessageLabel = nullptr;
 
     // ---- icon ----
     lv_img_dsc_t _navIconDesc = {};
@@ -71,6 +74,10 @@ private:
     // ---- data ----
     AppNavigation _navData;
     bool _lastActiveState = false;
+    bool _homeMode = false;   // true ketika layar dipakai sebagai HOME
+    bool _lastLayoutActive = false;
+    bool _lastLayoutStateValid = false;
+    bool _lastShowMusicLayout = false;
 
     // ------------------------------------------------------------------
     // Helpers
@@ -112,6 +119,119 @@ private:
         lv_obj_clear_flag(obj, LV_OBJ_FLAG_SCROLLABLE);
     }
 
+    // --- FIX B: sanitasi teks dari BLE sebelum masuk label LVGL ---
+    // Menghapus karakter spasi Unicode khusus (NBSP, narrow no-break space,
+    // thin space, ...), zero-width, dan BOM yang tidak ada glyph di font.
+    // Buffer harus sudah dialokasikan pemanggil (no heap alloc di render).
+    static void sanitizeText(const char* src, char* dst, size_t dstSize) {
+        if (dstSize == 0) {
+            return;
+        }
+        if (src == nullptr) {
+            dst[0] = '\0';
+            return;
+        }
+
+        size_t out = 0;
+        const uint8_t* p = (const uint8_t*)src;
+        bool lastWasSpace = false;
+
+        while (*p != 0 && out + 1 < dstSize) {
+            // Deteksi multi-byte UTF-8 dikenal
+            if (p[0] == 0xE2 && p[1] != 0 && p[2] != 0) {
+                uint8_t b1 = p[1];
+                uint8_t b2 = p[2];
+                // E2 80 xx generalized
+                if (b1 == 0x80) {
+                    switch (b2) {
+                        case 0x87: // U+2007 figure space
+                        case 0x89: // U+2009 thin space
+                        case 0x8A: // U+200A hair space
+                        case 0x8B: // U+200B zero-width space
+                        case 0x8C: // U+200C ZWNJ
+                        case 0x8D: // U+200D ZWJ
+                        case 0x8E: // U+200E LRM
+                        case 0x8F: // U+200F RLM
+                        case 0xAF: // U+202F narrow no-break space
+                        case 0xA8: // U+2028 line separator
+                        case 0xA9: // U+2029 paragraph separator
+                            // spasi/zero-width -> spasi biasa (atau buang utk zw)
+                            if (b2 == 0x8B || b2 == 0x8C || b2 == 0x8D ||
+                                b2 == 0x8E || b2 == 0x8F) {
+                                p += 3; // drop zero-width / bidi markers
+                                continue;
+                            }
+                            if (!lastWasSpace) {
+                                dst[out++] = ' ';
+                                lastWasSpace = true;
+                            }
+                            p += 3;
+                            continue;
+                        default:
+                            break;
+                    }
+                }
+            } else if (p[0] == 0xC2 && p[1] == 0xA0) {
+                // U+00A0 no-break space
+                if (!lastWasSpace) {
+                    dst[out++] = ' ';
+                    lastWasSpace = true;
+                }
+                p += 2;
+                continue;
+            } else if (p[0] == 0xEF && p[1] == 0xBB && p[2] == 0xBF) {
+                // U+FEFF BOM / zero-width no-break
+                p += 3;
+                continue;
+            }
+
+            // Karakter kontrol ASCII (< 0x20) dibuang kecuali tab -> spasi
+            if (p[0] < 0x20) {
+                if (p[0] == '\t' && !lastWasSpace) {
+                    dst[out++] = ' ';
+                    lastWasSpace = true;
+                }
+                p++;
+                continue;
+            }
+
+            if (p[0] == ' ') {
+                if (!lastWasSpace) {
+                    dst[out++] = ' ';
+                    lastWasSpace = true;
+                }
+                p++;
+                continue;
+            }
+
+            dst[out++] = (char)p[0];
+            lastWasSpace = false;
+            p++;
+        }
+
+        // trim trailing space
+        while (out > 0 && dst[out - 1] == ' ') {
+            out--;
+        }
+        dst[out] = '\0';
+
+        // Opsional: "10.08" -> "10:08" khusus pola HH.MM (2 digit . 2 digit).
+        for (size_t i = 0; i + 4 < out + 1 && i + 4 <= out; i++) {
+            if (dst[i] >= '0' && dst[i] <= '9' &&
+                dst[i + 1] >= '0' && dst[i + 1] <= '9' &&
+                dst[i + 2] == '.' &&
+                dst[i + 3] >= '0' && dst[i + 3] <= '9' &&
+                dst[i + 4] >= '0' && dst[i + 4] <= '9') {
+                // Pastikan bukan bagian dari desimal/angka lebih panjang
+                bool beforeOk = (i == 0) || !(dst[i - 1] >= '0' && dst[i - 1] <= '9');
+                bool afterOk = (i + 5 >= out) || !(dst[i + 5] >= '0' && dst[i + 5] <= '9');
+                if (beforeOk && afterOk) {
+                    dst[i + 2] = ':';
+                }
+            }
+        }
+    }
+
     // Marquee label dipakai bersama oleh ETA dan kotak musik.
     static lv_obj_t* createMarqueeLabel(lv_obj_t* parent, lv_coord_t x, lv_coord_t y,
                                         lv_coord_t w, lv_coord_t h,
@@ -142,6 +262,8 @@ private:
             return; // tidak berubah: biarkan animasi yang sudah ada
         }
 
+        // Reset total: hapus animasi, set mode CLIP, kosongkan, lalu isi teks
+        // baru. Ini mencegah dua animasi berjalan untuk satu label.
         lv_anim_del(label, NULL);
         lv_label_set_long_mode(label, LV_LABEL_LONG_CLIP);
         lv_label_set_text(label, "");
@@ -152,17 +274,16 @@ private:
         lv_txt_get_size(&textSize, text, font, 0, 0, LV_COORD_MAX, LV_TEXT_FLAG_NONE);
         const lv_coord_t available = lv_obj_get_width(label);
 
-        if (textSize.x > available) {
-            lv_label_set_long_mode(label, LV_LABEL_LONG_SCROLL_CIRCULAR);
-        } else {
-            lv_label_set_long_mode(label, LV_LABEL_LONG_CLIP);
-        }
+        lv_label_set_long_mode(label,
+            textSize.x > available ? LV_LABEL_LONG_SCROLL_CIRCULAR : LV_LABEL_LONG_CLIP);
 
         lv_obj_invalidate(label);
+        lv_obj_t* parent = lv_obj_get_parent(label);
+        if (parent != nullptr) {
+            lv_obj_invalidate(parent);
+        }
     }
 
-    // Vẽ bitmap 1-bit của Chronos sebagai icon alpha (nền trong suốt).
-    // Bit 1 = nét vẽ, bit 0 = trong suốt. Icon được tô trắng bằng recolor.
     void drawNavIconDirectly() {
         if (!_hasValidIcon || _iconData == nullptr || _iconTile == nullptr) {
             return;
@@ -189,21 +310,18 @@ private:
         lv_obj_center(_navIcon);
     }
 
-    // Atur font instruksi secara adaptif agar tetap terbaca di layar 240 px.
-    void applyDirectionStyle(const String& direction) {
+    // Atur font & long-mode instruksi. Teks sudah di-sanitize sebelumnya.
+    void applyDirectionStyle(const char* direction) {
         if (_directionLabel == nullptr) {
             return;
         }
-
-        const size_t len = direction.length();
+        const size_t len = strlen(direction);
         lv_font_t* font = VietnameseFonts::getSemiboldSmallFont();
         lv_label_long_mode_t mode = LV_LABEL_LONG_WRAP;
 
         if (len <= 18) {
-            // Instruksi pendek ("Belok kiri") tampil besar dan tebal.
             font = VietnameseFonts::getBoldFont();
-        } else if (len > 42) {
-            // Instruksi sangat panjang: font lebih ramping + elipsis.
+        } else if (len > 60) {
             font = VietnameseFonts::getNormalFont();
             mode = LV_LABEL_LONG_DOT;
         }
@@ -225,14 +343,13 @@ private:
         _directionLabel = nullptr;
         _etaDivider = nullptr;
         _etaLabel = nullptr;
+        _homeClock = nullptr;
+        _homeHint = nullptr;
         _musicBox = nullptr;
         _musicIcon = nullptr;
         _musicLabel = nullptr;
-        _idleCard = nullptr;
-        _idleTitle = nullptr;
-        _idleClock = nullptr;
-        _defaultMessageLabel = nullptr;
         _bleDotInitialized = false;
+        _lastLayoutStateValid = false;
     }
 
     // ------------------------------------------------------------------
@@ -326,7 +443,7 @@ private:
         lv_obj_set_style_border_width(_etaDivider, 0, LV_PART_MAIN);
         lv_obj_set_style_pad_all(_etaDivider, 0, LV_PART_MAIN);
 
-        _etaLabel = createMarqueeLabel(_heroCard, 12, 114, 200, 29,
+        _etaLabel = createMarqueeLabel(_heroCard, 12, 115, 200, 26,
                                        VietnameseFonts::getNormalFont(), NavColors::TextMutedHex);
 
         if (_hasValidIcon) {
@@ -334,7 +451,28 @@ private:
         }
     }
 
-    // Kotak musik terpisah, anak langsung screen, di bawah kartu.
+    // HOME: jam besar + hint "Tidak ada navigasi". Tidak ada kartu.
+    void createHomeUI() {
+        _homeClock = lv_label_create(_screen);
+        lv_obj_set_size(_homeClock, 240, 49);
+        lv_obj_set_pos(_homeClock, 0, 70);
+        lv_obj_set_style_text_font(_homeClock, VietnameseFonts::getNumberBoldFont(), LV_PART_MAIN);
+        lv_obj_set_style_text_color(_homeClock, lv_color_hex(NavColors::TextPrimaryHex), LV_PART_MAIN);
+        lv_obj_set_style_text_align(_homeClock, LV_TEXT_ALIGN_CENTER, LV_PART_MAIN);
+        lv_label_set_long_mode(_homeClock, LV_LABEL_LONG_CLIP);
+        lv_label_set_text(_homeClock, "--:--");
+
+        _homeHint = lv_label_create(_screen);
+        lv_obj_set_size(_homeHint, 240, 31);
+        lv_obj_set_pos(_homeHint, 0, 126);
+        lv_obj_set_style_text_font(_homeHint, VietnameseFonts::getNormalFont(), LV_PART_MAIN);
+        lv_obj_set_style_text_color(_homeHint, lv_color_hex(NavColors::TextFaintHex), LV_PART_MAIN);
+        lv_obj_set_style_text_align(_homeHint, LV_TEXT_ALIGN_CENTER, LV_PART_MAIN);
+        lv_label_set_long_mode(_homeHint, LV_LABEL_LONG_CLIP);
+        lv_label_set_text(_homeHint, "Tidak ada navigasi");
+    }
+
+    // Kotak musik terpisah, anak langsung screen, di bawah.
     void createMusicBox() {
         _musicBox = lv_obj_create(_screen);
         lv_obj_set_size(_musicBox, 224, 40);
@@ -352,36 +490,25 @@ private:
                                          VietnameseFonts::getSemiboldSmallFont(), NavColors::TextMutedHex);
     }
 
-    void createIdleCard() {
-        _idleCard = lv_obj_create(_screen);
-        lv_obj_set_size(_idleCard, 224, 146);
-        lv_obj_set_pos(_idleCard, 8, 38);
-        makeSurface(_idleCard, NavColors::SurfaceHex, 255, 14, NavColors::BorderHex);
-        lv_obj_set_style_clip_corner(_idleCard, true, LV_PART_MAIN);
+    // Terapkan visibilitas semua objek menurut state (satu sumber kebenaran).
+    void applyLayoutForState(bool navActive, bool hasMusic) {
+        // Kartu navigasi + isinya: hanya saat NAVIGATION aktif.
+        setVisible(_heroCard, navActive);
+        setVisible(_iconTile, navActive && _hasValidIcon);
+        setVisible(_distanceLabel, navActive);
+        setVisible(_directionLabel, navActive);
+        setVisible(_etaDivider, navActive);
+        setVisible(_etaLabel, navActive);
 
-        _idleTitle = lv_label_create(_idleCard);
-        lv_obj_set_pos(_idleTitle, 16, 10);
-        lv_obj_set_width(_idleTitle, 192);
-        lv_obj_set_style_text_font(_idleTitle, VietnameseFonts::getSemiboldSmallFont(), LV_PART_MAIN);
-        lv_obj_set_style_text_color(_idleTitle, lv_color_hex(NavColors::TextMutedHex), LV_PART_MAIN);
-        lv_label_set_text(_idleTitle, "Tidak ada navigasi");
+        // HOME: jam besar + hint hanya saat TIDAK ada navigasi.
+        setVisible(_homeClock, !navActive);
+        setVisible(_homeHint, !navActive);
 
-        // Jam besar di tengah (HOME)
-        _idleClock = lv_label_create(_idleCard);
-        lv_obj_set_pos(_idleClock, 12, 50);
-        lv_obj_set_size(_idleClock, 200, 49);
-        lv_obj_set_style_text_font(_idleClock, VietnameseFonts::getNumberBoldFont(), LV_PART_MAIN);
-        lv_obj_set_style_text_color(_idleClock, lv_color_hex(NavColors::TextPrimaryHex), LV_PART_MAIN);
-        lv_obj_set_style_text_align(_idleClock, LV_TEXT_ALIGN_CENTER, LV_PART_MAIN);
-        lv_label_set_text(_idleClock, "--:--");
+        // Header jam kecil: sembunyikan di HOME (agar tidak ada dua jam).
+        setVisible(_timeLabel, navActive);
 
-        _defaultMessageLabel = lv_label_create(_idleCard);
-        lv_obj_set_pos(_defaultMessageLabel, 16, 106);
-        lv_obj_set_size(_defaultMessageLabel, 192, 34);
-        lv_obj_set_style_text_font(_defaultMessageLabel, VietnameseFonts::getNormalFont(), LV_PART_MAIN);
-        lv_obj_set_style_text_color(_defaultMessageLabel, lv_color_hex(NavColors::TextFaintHex), LV_PART_MAIN);
-        lv_label_set_long_mode(_defaultMessageLabel, LV_LABEL_LONG_WRAP);
-        lv_label_set_text(_defaultMessageLabel, "Mulai navigasi di Google Maps");
+        // Kotak musik: tampil di NAVIGATION dan HOME bila ada lagu.
+        setVisible(_musicBox, hasMusic);
     }
 
 public:
@@ -390,10 +517,7 @@ public:
     }
 
     ~NavigationScreenLVGL() {
-        // Dữ liệu pixel không còn là static buffer; descriptor chỉ trỏ
-        // tới _iconBuffer của objek ini.
         _navIconDesc.data = nullptr;
-
         if (_screen != nullptr) {
             lv_obj_del(_screen);
             _screen = nullptr;
@@ -405,12 +529,16 @@ public:
         return _screen != nullptr;
     }
 
-    // Tạo màn hình điều hướng / HOME
+    // Setelah create() dipanggil ulang, HOME mode harus dipulihkan pemanggil
+    // lewat setHomeMode(). Default false (NAVIGATION).
+    void setHomeMode(bool home) {
+        _homeMode = home;
+        _lastLayoutStateValid = false;
+    }
+
     void create() {
         VietnameseFonts::init();
 
-        // Jangan hapus objek screen jika sedang aktif (LVGL akan mengosongkan
-        // act_scr). Cukup bersihkan anak-anaknya lalu bangun ulang UI.
         if (_screen == nullptr) {
             _screen = lv_obj_create(NULL);
             if (_screen == nullptr) {
@@ -428,7 +556,7 @@ public:
 
         createHeader();
         createHeroCard();
-        createIdleCard();
+        createHomeUI();
         createMusicBox();
 
         updateLabels();
@@ -436,7 +564,6 @@ public:
         Serial.println("NavigationScreenLVGL: Screen created successfully");
     }
 
-    // Tampilkan màn hình
     void display() {
         if (_screen == nullptr) {
             Serial.println("ERROR: NavigationScreenLVGL - _screen is NULL, cannot display");
@@ -445,7 +572,6 @@ public:
 
         updateLabels();
 
-        // Pastikan peta tetap di belakang semua komponen UI.
         if (_bgImage != nullptr) {
             lv_obj_move_background(_bgImage);
         }
@@ -457,11 +583,9 @@ public:
             lv_scr_load(_screen);
         }
 
-        // Render segera supaya perubahan terlihat tanpa menunggu tick LVGL.
         lv_refr_now(NULL);
     }
 
-    // Cập nhật dữ liệu điều hướng
     void updateNavigation(const AppNavigation &navData) {
         const bool wasActive = _navData.active && _navData.isNavigation;
         const bool willBeActive = navData.active && navData.isNavigation;
@@ -487,7 +611,7 @@ public:
         }
     }
 
-    // Cập nhật teks dan visibilitas seluruh komponen
+    // Update semua teks + visibility. Dipanggil tiap render.
     void updateLabels() {
         if (_screen == nullptr) {
             return;
@@ -495,15 +619,15 @@ public:
 
         const bool isActive = _navData.active && _navData.isNavigation;
 
-        // ---- jam (header kiri + jam besar HOME) ----
+        // ---- jam kecil header + jam besar HOME (format sama) ----
         char timeBuf[12];
         const int hour = ChronosManager::getInstance().getChronos().getHour();
         const int minute = ChronosManager::getInstance().getChronos().getMinute();
         snprintf(timeBuf, sizeof(timeBuf), "%d:%02d", hour, minute);
         setLabel(_timeLabel, timeBuf);
-        setLabel(_idleClock, timeBuf);
+        setLabel(_homeClock, timeBuf);
 
-        // ---- dot status BLE (hanya ubah warna bila berubah) ----
+        // ---- dot BLE (hanya ubah bila status berubah) ----
         if (_bleDot != nullptr) {
             const bool bleConnected = ChronosManager::getInstance().isConnected();
             const uint32_t dotColor = bleConnected
@@ -516,48 +640,68 @@ public:
             }
         }
 
-        // ---- now playing (judul - artis) ----
+        // ---- now playing (judul - artis), disanitasi ----
         MusicInfo music = ChronosManager::getInstance().getMusicInfo();
-        char musicBuf[160];
-        musicBuf[0] = '\0';
-        bool hasMusic = false;
-        if (music.state == 1 && music.title.length() > 0) {
-            hasMusic = true;
+        char musicRaw[192];
+        char musicBuf[192];
+        musicRaw[0] = '\0';
+        const bool hasMusicRaw = (music.state == 1 && music.title.length() > 0);
+        if (hasMusicRaw) {
             if (music.artist.length() > 0) {
-                snprintf(musicBuf, sizeof(musicBuf), "%s - %s",
+                snprintf(musicRaw, sizeof(musicRaw), "%s - %s",
                          music.title.c_str(), music.artist.c_str());
             } else {
-                snprintf(musicBuf, sizeof(musicBuf), "%s", music.title.c_str());
+                snprintf(musicRaw, sizeof(musicRaw), "%s", music.title.c_str());
             }
         }
+        sanitizeText(musicRaw, musicBuf, sizeof(musicBuf));
+        const bool hasMusic = (musicBuf[0] != '\0');
 
         _showMusic = hasMusic;
         setMarqueeText(_musicLabel, musicBuf);
-        setVisible(_musicBox, hasMusic);
 
-        if (hasMusic != _lastHasMusic) {
-            _lastHasMusic = hasMusic;
-            if (_musicBox != nullptr) {
-                lv_obj_invalidate(_musicBox);
-            }
+#if MUSIC_DEBUG
+        static bool lastHasMusicDbg = false;
+        if (hasMusic != lastHasMusicDbg) {
+            lastHasMusicDbg = hasMusic;
+            Serial.printf("[MUSIC] render hasMusic=%d text='%s'\n",
+                          hasMusic ? 1 : 0, musicBuf);
         }
+#endif
 
-        // ---- jarak + instruksi manuver ----
-        String direction = _navData.directions;
+        // ---- jarak + instruksi manuver, disanitasi ----
+        char dirRaw[200];
+        char dirBuf[200];
+        char distRaw[64];
+        char distBuf[64];
+        dirRaw[0] = '\0';
+        distRaw[0] = '\0';
         if (isActive) {
-            if (direction.length() == 0) {
-                direction = "Lanjutkan perjalanan";
+            const char* src = _navData.directions.c_str();
+            if (src[0] == '\0') {
+                src = "Lanjutkan perjalanan";
             }
-            applyDirectionStyle(direction);
-            setLabel(_directionLabel, direction.c_str());
-            setLabel(_distanceLabel, _navData.distance.c_str());
+            strncpy(dirRaw, src, sizeof(dirRaw) - 1);
+            dirRaw[sizeof(dirRaw) - 1] = '\0';
+            strncpy(distRaw, _navData.distance.c_str(), sizeof(distRaw) - 1);
+            distRaw[sizeof(distRaw) - 1] = '\0';
+        }
+        sanitizeText(dirRaw, dirBuf, sizeof(dirBuf));
+        sanitizeText(distRaw, distBuf, sizeof(distBuf));
+
+        if (isActive) {
+            applyDirectionStyle(dirBuf);
+            setLabel(_directionLabel, dirBuf);
+            setLabel(_distanceLabel, distBuf);
         } else {
             setLabel(_directionLabel, "");
             setLabel(_distanceLabel, "");
         }
 
-        // ---- ETA (di dalam kartu, pakai marquee yang sama) ----
-        String etaText;
+        // ---- ETA (di dalam kartu, di-sanitasi) ----
+        char etaRaw[96];
+        char etaBuf[96];
+        etaRaw[0] = '\0';
         if (isActive) {
             String eta = _navData.eta;
             if (eta == "Navigation") {
@@ -565,30 +709,39 @@ public:
             }
             if (eta.length() > 0) {
                 if (eta.startsWith("Tiba")) {
-                    etaText = eta;
+                    strncpy(etaRaw, eta.c_str(), sizeof(etaRaw) - 1);
                 } else {
-                    etaText = "Tiba " + eta;
+                    snprintf(etaRaw, sizeof(etaRaw), "Tiba %s", eta.c_str());
                 }
             } else if (_navData.duration.length() > 0) {
-                etaText = "Tiba dalam " + _navData.duration;
+                snprintf(etaRaw, sizeof(etaRaw), "Tiba dalam %s", _navData.duration.c_str());
             } else {
-                etaText = "--";
+                strncpy(etaRaw, "--", sizeof(etaRaw) - 1);
+            }
+            etaRaw[sizeof(etaRaw) - 1] = '\0';
+        }
+        sanitizeText(etaRaw, etaBuf, sizeof(etaBuf));
+        setMarqueeText(_etaLabel, etaBuf);
+
+        // ---- terapkan layout (hanya saat state berubah) ----
+        const bool navActive = isActive;
+        if (!_lastLayoutStateValid ||
+            _lastLayoutActive != navActive ||
+            _lastShowMusicLayout != hasMusic) {
+            _lastLayoutStateValid = true;
+            _lastLayoutActive = navActive;
+            _lastShowMusicLayout = hasMusic;
+            applyLayoutForState(navActive, hasMusic);
+        }
+
+        if (hasMusic != _lastHasMusic) {
+            _lastHasMusic = hasMusic;
+            if (_musicBox != nullptr) {
+                lv_obj_invalidate(_musicBox);
             }
         }
-        setMarqueeText(_etaLabel, etaText.c_str());
-
-        // ---- visibilitas ----
-        setVisible(_idleCard, !isActive);
-        setVisible(_heroCard, isActive);
-        setVisible(_etaDivider, isActive);
-        setVisible(_etaLabel, isActive);
-        setVisible(_distanceLabel, isActive);
-        setVisible(_iconTile, isActive && _hasValidIcon);
-        setVisible(_directionLabel, isActive);
-        setVisible(_musicBox, hasMusic);
     }
 
-    // Dipertahankan sebagai API publik karena dipanggil NavigationManagerLVGL.
     void updateUIBasedOnNavigationState() {
         const bool isActive = _navData.active && _navData.isNavigation;
         updateLabels();

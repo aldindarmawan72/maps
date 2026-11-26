@@ -3,6 +3,11 @@
 
 #include <Arduino.h>
 
+// Aktifkan log debug musik (rx/snap/render). Matikan saat produksi.
+#define MUSIC_DEBUG 0
+// Aktifkan dump hex mentah "Received data: ..." tiap paket (bising).
+#define BLE_RAW_DUMP 0
+
 // Shared configuration settings used by multiple files
 namespace Config {
   // Navigation settings

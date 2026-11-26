@@ -27,6 +27,10 @@ private:
     // Snapshot thông tin bài hát, chỉ cập nhật trong loop chính khi version đổi
     MusicInfo _musicSnapshot;
     uint32_t _musicVersion = 0;
+    // Set by the BLE callback task; consumed (snapshot + clear) by update().
+    volatile bool _musicDirty = false;
+    volatile uint8_t _musicState = 0;
+    portMUX_TYPE _musicMux = portMUX_INITIALIZER_UNLOCKED;
     
     // Callback khi nhận được biểu tượng điều hướng
     static void iconCallbackHandler(uint8_t icon, String data) {
@@ -120,17 +124,13 @@ private:
             break;
             
         case ConfigType::CF_MUSIC: {
-            // a = 0 (status/app), 1 (title), 2 (artist)
-            // Called from the NimBLE task, so read the library object directly
-            // (never touch the LVGL snapshot / UI from here).
-            MusicInfo music = (instance.chronos != nullptr)
-                                  ? instance.chronos->getMusicInfo()
-                                  : MusicInfo();
-            if (value1 == 2) {
-                Serial.printf("Music: %s - %s [%s] state=%s\n",
-                              music.title.c_str(), music.artist.c_str(),
-                              music.appName.c_str(), music.state == 1 ? "playing" : "paused");
-            }
+            // This runs in the NimBLE callback task. Do NOT copy the library's
+            // String members here (concurrent String alloc/free across cores
+            // corrupts the heap and leaves the snapshot empty). Just take the
+            // scalar state + bump a dirty flag; the main loop snapshots under a
+            // critical section in update().
+            instance._musicState = value2;
+            instance._musicDirty = true;
             break;
         }
             
@@ -229,17 +229,22 @@ public:
         if (chronos != nullptr) {
             chronos->loop();
 
-            // Chỉ sao chép dữ liệu nhạc khi callback BLE báo có bản mới.
-            // Việc đọc/ghi String diễn ra ở loop chính thay vì task NimBLE.
-            // Đọc version 2 lần để tránh chụp phải dữ liệu đang được ghi dở.
-            uint32_t versionBefore = chronos->getMusicVersion();
-            if (versionBefore != _musicVersion) {
+            // Chỉ sao chép dữ liệu nhạc khi callback BLE đã báo có bản mới.
+            // Việc đọc String từ lib diễn ra trong loop chính (không phải task
+            // NimBLE). Lock ngắn để tránh chụp giữa lúc packet đang được parse.
+            if (_musicDirty) {
+                portENTER_CRITICAL(&_musicMux);
+                _musicDirty = false;
                 MusicInfo copy = chronos->getMusicInfo();
-                uint32_t versionAfter = chronos->getMusicVersion();
-                if (versionBefore == versionAfter) {
-                    _musicVersion = versionBefore;
-                    _musicSnapshot = copy;
-                }
+                _musicSnapshot = copy;
+                _musicState = copy.state;
+                portEXIT_CRITICAL(&_musicMux);
+#if MUSIC_DEBUG
+                Serial.printf("[MUSIC] snap title='%s' artist='%s' state=%d\n",
+                              _musicSnapshot.title.c_str(),
+                              _musicSnapshot.artist.c_str(),
+                              (int)_musicSnapshot.state);
+#endif
             }
         }
         

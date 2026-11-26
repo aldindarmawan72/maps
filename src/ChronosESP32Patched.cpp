@@ -33,6 +33,7 @@
 */
 
 #include "ChronosESP32Patched.h"
+#include "Config.h"
 
 // Triển khai cơ bản các phương thức cần thiết
 
@@ -241,45 +242,86 @@ void ChronosESP32Patched::onWrite(NimBLECharacteristic *pCharacteristic, NimBLEC
         int len = pData.length();
         
         if (len > 0) {
+#if MUSIC_DEBUG
+            Serial.printf("[W] len=%d %02X %02X %02X %02X %02X %02X %02X\n", len,
+                          (uint8_t)pData[0], (uint8_t)pData[1], (uint8_t)pData[2],
+                          (uint8_t)pData[3], len > 4 ? (uint8_t)pData[4] : 0,
+                          len > 5 ? (uint8_t)pData[5] : 0,
+                          len > 6 ? (uint8_t)pData[6] : 0);
+#endif
             if (rawDataReceivedCallback != nullptr) {
                 rawDataReceivedCallback((uint8_t *)pData.data(), len);
             }
 
             if ((pData[0] == 0xAB || pData[0] == 0xEA) && (pData[3] == 0xFE || pData[3] == 0xFF)) {
-                // Bắt đầu của dữ liệu, lấy chiều dài từ packet
+                // BẮT ĐẦU gói mới: pData[1..2] = panjang payload (không gồm 3 byte header).
+                // length = total byte frame = payload + 3 header.
                 _incomingData.length = pData[1] * 256 + pData[2] + 3;
-                
-                // Sao chép dữ liệu vào buffer
+
+                // Sao chép toàn bộ chunk đầu vào buffer.
+                if (len > (int)sizeof(_incomingData.data)) {
+                    len = sizeof(_incomingData.data); // chống tràn
+                }
                 for (int i = 0; i < len; i++) {
                     _incomingData.data[i] = pData[i];
                 }
+                _incomingReceived = len;
 
-                if (_incomingData.length <= len) {
-                    // Gói tin đã được ghép đầy đủ
+                if (_incomingReceived >= _incomingData.length) {
+                    // Đủ ngay trong 1 frame.
                     dataReceived();
-                }
-                else {
-                    // Dữ liệu vẫn đang được ghép
-                    Serial.println("Packet incomplete, waiting for more data...");
+                } else {
+#if MUSIC_DEBUG
+                    Serial.printf("[PKT] start: declared=%d have=%d (split)\n",
+                                  _incomingData.length, _incomingReceived);
+#endif
+                    // Paket musik (0x9D) dari app dikirim tanpa chunking dan
+                    // dipotong diam-diam di MTU (20 byte) oleh Android; chunk
+                    // lanjutan tak pernah datang. Parse bagian awal yang ada
+                    // (state + warna ada di byte 6..12, judul/artis parsial)
+                    // supaya status putar tetap terbaca.
+                    if (_incomingReceived >= 7 &&
+                        _incomingData.data[3] == 0xFE &&
+                        _incomingData.data[4] == 0x9D) {
+                        _incomingData.length = _incomingReceived;
+                        dataReceived();
+                    }
                 }
             }
             else {
-                // Đây là phần tiếp theo của gói tin
-                int j = 20 + (pData[0] * 19); // Vị trí dữ liệu gói
-                
-                // Sao chép dữ liệu vào buffer
-                for (int i = 0; i < len; i++) {
-                    _incomingData.data[j + i] = pData[i + 1];
+                // CHUNK TIẾP THEO: nối trực tiếp vào sau các byte đã nhận.
+                // Bỏ byte đầu (pData[0] = index chunk) nếu mTU gửi kèm; nội dung
+                // nối byte tiếp theo cần ghép.
+                int payloadOffset = (len > 0 && _incomingReceived > 0) ? 1 : 0;
+                int copyable = len - payloadOffset;
+                if (copyable <= 0) {
+                    return;
                 }
 
-                if (_incomingData.length <= len + j - 1) {
-                    // Gói tin đã được ghép đầy đủ
+                // Chống tràn buffer.
+                if (_incomingReceived + copyable > (int)sizeof(_incomingData.data)) {
+                    copyable = (int)sizeof(_incomingData.data) - _incomingReceived;
+                }
+                if (copyable <= 0) {
+                    _incomingReceived = 0;
+                    _incomingData.length = 0;
+                    return;
+                }
+
+                for (int i = 0; i < copyable; i++) {
+                    _incomingData.data[_incomingReceived + i] = pData[i + payloadOffset];
+                }
+                _incomingReceived += copyable;
+
+                if (_incomingReceived >= _incomingData.length) {
                     dataReceived();
                 }
+#if MUSIC_DEBUG
                 else {
-                    // Dữ liệu vẫn đang được ghép
-                    Serial.println("Packet still incomplete, waiting for more data...");
+                    Serial.printf("[PKT] chunk: declared=%d have=%d\n",
+                                  _incomingData.length, _incomingReceived);
                 }
+#endif
             }
         }
     }
@@ -307,18 +349,23 @@ void ChronosESP32Patched::sendCommand(uint8_t *command, size_t length, bool forc
 }
 
 void ChronosESP32Patched::dataReceived() {
+    // Đánh dấu đã xử lý xong để chunk sau bắt đầu gói mới sạch sẽ.
+    _incomingReceived = 0;
+
     // Kiểm tra xem có dữ liệu không
     if (_incomingData.length < 1) {
         return;
     }
     int len = _incomingData.length;
     
+    #if BLE_RAW_DUMP
     // Log raw data received (for debugging) with special formatting
     Serial.print("Received data: ");
     for (int i = 0; i < len; i++) {
         Serial.printf("%02X ", _incomingData.data[i]);
     }
     Serial.println();
+#endif
     
     // Gửi cho callback nếu người dùng muốn xử lý dữ liệu thô
     if (rawDataReceivedCallback != nullptr) {
@@ -522,6 +569,12 @@ void ChronosESP32Patched::dataReceived() {
                             }
 
                             _musicVersion++;
+#if MUSIC_DEBUG
+                            Serial.printf("[MUSIC] rx app='%s' pkg='%s' state=%d\n",
+                                          _musicInfo.appName.c_str(),
+                                          _musicInfo.packageName.c_str(),
+                                          (int)_musicInfo.state);
+#endif
                             if (configurationReceivedCallback != nullptr) {
                                 configurationReceivedCallback(ConfigType::CF_MUSIC, 0, _musicInfo.state);
                             }
@@ -535,6 +588,9 @@ void ChronosESP32Patched::dataReceived() {
                                 _musicInfo.title += (char)_incomingData.data[i];
                                 i++;
                             }
+#if MUSIC_DEBUG
+                            Serial.printf("[MUSIC] rx title='%s'\n", _musicInfo.title.c_str());
+#endif
                             _musicVersion++;
                             if (configurationReceivedCallback != nullptr) {
                                 configurationReceivedCallback(ConfigType::CF_MUSIC, 1, _musicInfo.state);
@@ -549,6 +605,9 @@ void ChronosESP32Patched::dataReceived() {
                                 _musicInfo.artist += (char)_incomingData.data[i];
                                 i++;
                             }
+#if MUSIC_DEBUG
+                            Serial.printf("[MUSIC] rx artist='%s'\n", _musicInfo.artist.c_str());
+#endif
                             _musicVersion++;
                             if (configurationReceivedCallback != nullptr) {
                                 configurationReceivedCallback(ConfigType::CF_MUSIC, 2, _musicInfo.state);

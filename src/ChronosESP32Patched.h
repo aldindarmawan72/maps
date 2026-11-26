@@ -434,6 +434,8 @@ private:
 
     ChronosData _incomingData;
     ChronosData _outgoingData;
+    // Số byte payload paket masuk yang sudah terkumpul (untuk reassembly MTU).
+    int _incomingReceived = 0;
 
     ChronosScreen _screenConf = CS_240x240_128_CTF;
 

@@ -30,6 +30,7 @@ private:
   ESP32Time* _time = nullptr;
   lv_obj_t* _blankScreen = nullptr;
   bool _displaySuspended = false;
+  bool _homeMode = false;
   
   // Dữ liệu chỉ đường đã lưu để so sánh thay đổi
   AppNavigation _navData;
@@ -131,6 +132,7 @@ public:
         if (_navScreen && _navScreen->isScreenReady()) {
           // Không gọi display() ở đây để tránh hiển thị màn hình navigation
           _navScreen->create(); // Tạo lại screen (sẽ ẩn các thành phần)
+          _navScreen->setHomeMode(_homeMode);
         }
         
         // Ngay lập tức thoát khỏi hàm update để không cập nhật màn hình navigation nữa
@@ -289,6 +291,7 @@ public:
         _navMode = NavigationMode::FULLSCREEN;
       }
       if (_navScreen != nullptr && _navScreen->isScreenReady()) {
+        _navScreen->setHomeMode(_homeMode);
         _navScreen->display();
       }
       Serial.println("Navigation display resumed");
@@ -297,6 +300,19 @@ public:
 
   bool isDisplaySuspended() {
     return _displaySuspended;
+  }
+
+  // Pilih apakah layar fullscreen dipakai sebagai HOME (jam besar) atau
+  // NAVIGATION (kartu). Di-set oleh state machine (main.cpp).
+  void setHomeMode(bool home) {
+    _homeMode = home;
+    if (_navScreen != nullptr && _navScreen->isScreenReady()) {
+      _navScreen->setHomeMode(home);
+    }
+  }
+
+  bool isHomeMode() {
+    return _homeMode;
   }
   
   // Lấy dữ liệu điều hướng hiện tại
@@ -339,6 +355,9 @@ public:
       Serial.println("Cannot display navigation: _navScreen is null");
       return;
     }
+
+    // Sinkronkan mode HOME/NAVIGATION sebelum render.
+    _navScreen->setHomeMode(_homeMode);
     
     // Cập nhật dữ liệu điều hướng cho NavigationScreen
     _navScreen->updateNavigation(navData);
